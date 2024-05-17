@@ -36,8 +36,7 @@ func InitRoute(router *gin.Engine, autoMiddleware *jwt.GinJWTMiddleware) {
 	{
 		routerGrout.POST("/", controller.RdsTest)
 		routerGrout.GET("/chating/:roomId", func(c *gin.Context) {
-			roomId := c.Param("roomId")
-			controller.WebsocketHandler(hub, c.Writer, c.Request, roomId)
+			controller.WebsocketHandler(hub, c)
 		})
 
 	}

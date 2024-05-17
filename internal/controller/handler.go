@@ -2,8 +2,9 @@ package controller
 
 import (
 	"net/http"
-	"time"
+	"sync"
 
+	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
 	"github.com/rs/zerolog/log"
 )
@@ -17,55 +18,76 @@ var upgrader = websocket.Upgrader{
 }
 
 type Hub struct {
-	connections map[*websocket.Conn]chan []byte
-	broadcast   chan []byte
-	register    chan *websocket.Conn
-	unregister  chan *websocket.Conn
+	rooms      map[string]map[*websocket.Conn]chan []byte
+	broadcast  chan Message
+	register   chan Subscription
+	unregister chan Subscription
+	mu         sync.Mutex
+}
+type Message struct {
+	roomId string
+	data   []byte
+}
+
+type Subscription struct {
+	conn   *websocket.Conn
+	roomId string
 }
 
 func NewHub() *Hub {
 	return &Hub{
-		broadcast:   make(chan []byte),
-		register:    make(chan *websocket.Conn),
-		unregister:  make(chan *websocket.Conn),
-		connections: make(map[*websocket.Conn]chan []byte),
+		broadcast:  make(chan Message),
+		register:   make(chan Subscription),
+		unregister: make(chan Subscription),
+		rooms:      make(map[string]map[*websocket.Conn]chan []byte),
 	}
 }
 
 func (h *Hub) Run() {
 	for {
 		select {
-		case conn := <-h.register:
-			h.connections[conn] = make(chan []byte)
-			go h.writePump(conn)
-		case conn := <-h.unregister:
-			if _, ok := h.connections[conn]; ok {
-				delete(h.connections, conn)
-				close(h.connections[conn])
+		case subscription := <-h.register:
+			h.mu.Lock()
+			if _, ok := h.rooms[subscription.roomId]; !ok {
+				h.rooms[subscription.roomId] = make(map[*websocket.Conn]chan []byte)
+			}
+			h.rooms[subscription.roomId][subscription.conn] = make(chan []byte)
+			go h.writePump(subscription.conn, subscription.roomId)
+			go h.readPump(subscription.conn, subscription.roomId)
+			h.mu.Unlock()
+		case subscription := <-h.unregister:
+			h.mu.Lock()
+			if _, ok := h.rooms[subscription.roomId]; ok {
+				if _, ok := h.rooms[subscription.roomId][subscription.conn]; ok {
+					close(h.rooms[subscription.roomId][subscription.conn])
+					delete(h.rooms[subscription.roomId], subscription.conn)
+					if len(h.rooms[subscription.roomId]) == 0 {
+						delete(h.rooms, subscription.roomId)
+					}
+				}
 
 			}
+			h.mu.Unlock()
 		case message := <-h.broadcast:
-			for conn := range h.connections {
-				if err := conn.WriteMessage(websocket.TextMessage, message); err != nil {
-					log.Err(err).Msgf("Failed to write message : %v", err)
+			h.mu.Lock()
+			for conn, send := range h.rooms[message.roomId] {
+				select {
+				case send <- message.data:
+				default:
+					close(send)
+					delete(h.rooms[message.roomId], conn)
 					conn.Close()
-					delete(h.connections, conn)
 				}
 			}
+			h.mu.Unlock()
 		}
 	}
 }
 
-func (h *Hub) writePump(conn *websocket.Conn) {
-	ticker := time.NewTicker(54 * time.Second) // Ping-Pong을 위한 주기적 타이머
-	defer func() {
-		ticker.Stop()
-		conn.Close()
-	}()
-
+func (h *Hub) writePump(conn *websocket.Conn, roomId string) {
 	for {
 		select {
-		case message, ok := <-h.connections[conn]:
+		case message, ok := <-h.rooms[roomId][conn]:
 			if !ok {
 				// Hub가 채널을 닫음
 				conn.WriteMessage(websocket.CloseMessage, []byte{})
@@ -76,32 +98,41 @@ func (h *Hub) writePump(conn *websocket.Conn) {
 				log.Err(err).Msg("Failed to write message")
 				return
 			}
-		case <-ticker.C:
-			if err := conn.WriteMessage(websocket.PingMessage, nil); err != nil {
-				log.Err(err).Msg("Failed to send ping message")
-				return
-			}
 		}
 	}
 }
 
-func WebsocketHandler(hub *Hub, w http.ResponseWriter, r *http.Request, roomId string) {
-	conn, err := upgrader.Upgrade(w, r, nil)
+func (h *Hub) readPump(conn *websocket.Conn, roomId string) {
+	defer func() {
+		h.unregister <- Subscription{conn: conn, roomId: roomId}
+		conn.Close()
+	}()
+
+	for {
+		_, message, err := conn.ReadMessage()
+		if err != nil {
+			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
+				log.Err(err).Msg("Unexpected close error")
+			} else {
+				log.Err(err).Msg("Failed to read message")
+			}
+			break
+		}
+		h.broadcast <- Message{roomId: roomId, data: message}
+	}
+}
+
+func WebsocketHandler(hub *Hub, ginCtx *gin.Context) {
+	roomId := ginCtx.Param("roomId")
+	if roomId == "" {
+		ginCtx.JSON(http.StatusBadRequest, gin.H{"error": "roomId is required"})
+		return
+	}
+
+	conn, err := upgrader.Upgrade(ginCtx.Writer, ginCtx.Request, nil)
 	if err != nil {
 		log.Err(err).Msgf("Failed to upgrade connection : %v", err)
 		return
 	}
-	hub.register <- conn
-
-	defer func() {
-		hub.unregister <- conn
-	}()
-	for {
-		_, message, err := conn.ReadMessage()
-		if err != nil {
-			log.Err(err).Msgf("Failed to read message : %v", err)
-			break
-		}
-		hub.broadcast <- message
-	}
+	hub.register <- Subscription{conn: conn, roomId: roomId}
 }
