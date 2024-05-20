@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"encoding/json"
 	"net/http"
 	"sync"
 
@@ -118,6 +119,13 @@ func (h *Hub) readPump(conn *websocket.Conn, roomId string) {
 			}
 			break
 		}
+		var msg map[string]interface{}
+		if err := json.Unmarshal(message, &msg); err == nil {
+			if msg["type"] == "ping" {
+				log.Info().Msg("Received ping")
+				continue
+			}
+		}
 		h.broadcast <- Message{roomId: roomId, data: message}
 	}
 }
@@ -125,9 +133,27 @@ func (h *Hub) readPump(conn *websocket.Conn, roomId string) {
 func WebsocketHandler(hub *Hub, ginCtx *gin.Context) {
 	roomId := ginCtx.Param("roomId")
 	if roomId == "" {
+		log.Warn().Msg("roomId is required")
 		ginCtx.JSON(http.StatusBadRequest, gin.H{"error": "roomId is required"})
 		return
 	}
+
+	// tokenString := ginCtx.Query("token")
+	// if tokenString == "" {
+	// 	ginCtx.JSON(http.StatusUnauthorized, gin.H{"error": "Authorization token is required"})
+	// 	return
+	// }
+
+	// // JWT 토큰 검증
+	// token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
+	// 	// 검증 키를 반환
+	// 	return []byte("your_secret_key"), nil
+	// })
+
+	// if err != nil || !token.Valid {
+	// 	ginCtx.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid authorization token"})
+	// 	return
+	// }
 
 	conn, err := upgrader.Upgrade(ginCtx.Writer, ginCtx.Request, nil)
 	if err != nil {

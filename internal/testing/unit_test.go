@@ -1,7 +1,7 @@
 package testing
 
 import (
-	"chating_service/internal/utils"
+	"encoding/base64"
 	"fmt"
 	"testing"
 )
@@ -14,6 +14,11 @@ func Test(t *testing.T) {
 }
 
 func GetPassword() {
-	pwd, _ := utils.EncryptPassword("1234")
-	fmt.Println(pwd)
+	key := "hMG1HNqSMGzQLuUOGaV9mx"
+	decodedKey, err := base64.StdEncoding.DecodeString(key)
+	if err != nil {
+		fmt.Println("Base64 decoding error:", err)
+	} else {
+		fmt.Println("Base64 decoded key:", decodedKey)
+	}
 }

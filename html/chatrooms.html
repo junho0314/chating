@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chat Rooms</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #f0f0f0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+        }
+        .chatrooms-container {
+            background-color: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+            display: flex;
+            flex-wrap: wrap;
+            gap: 20px;
+            justify-content: center;
+        }
+        .chatroom {
+            width: 200px;
+            height: 200px;
+            border: 1px solid #ccc;
+            border-radius: 8px;
+            background-color: #f9f9f9;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            align-items: center;
+            box-shadow: 0 0 5px rgba(0, 0, 0, 0.1);
+            padding: 10px;
+        }
+        .chatroom h3 {
+            margin: 0;
+            font-size: 18px;
+            background-color: #4CAF50;
+            color: white;
+            width: 100%;
+            text-align: center;
+            padding: 10px 0;
+            border-radius: 8px 8px 0 0;
+        }
+        .chatroom button {
+            width: 80%;
+            padding: 10px;
+            border: none;
+            border-radius: 4px;
+            background-color: #FF5733;
+            color: white;
+            font-size: 16px;
+            cursor: pointer;
+            margin: auto;
+            margin-bottom: 10px;
+        }
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/js-cookie@3.0.1/dist/js.cookie.min.js"></script>
+</head>
+<body>
+    <div class="chatrooms-container" id="chatrooms-list">
+        <!-- 채팅방 목록이 여기에 표시됩니다. -->
+    </div>
+
+    <script>
+        function getCookie(name) {
+            return Cookies.get(name);
+        }
+
+        document.addEventListener('DOMContentLoaded', function() {
+            const token = getCookie('token');
+            alert('Retrieved token: ' + token); // 쿠키에서 읽어온 토큰 확인
+
+            if (!token) {
+                alert('No token found. Please log in again.');
+                window.location.href = 'index.html'; // 로그인 페이지로 리디렉션
+                return;
+            }
+
+            fetch('http://localhost:8080/api/chating_room', {
+                method: 'GET',
+                headers: {
+                    'Authorization': 'Bearer ' + token
+                }
+            })
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error('Network response was not ok');
+                }
+                return response.json();
+            })
+            .then(data => {
+                alert('Fetched data: ' + JSON.stringify(data)); // 서버 응답 데이터 확인
+                const chatroomsList = document.getElementById('chatrooms-list');
+                chatroomsList.innerHTML = ''; // 이전 목록 초기화
+                if (data.length === 0) {
+                    chatroomsList.innerHTML = '<p>No chat rooms available.</p>';
+                } else {
+                    data.forEach(room => {
+                        const roomElement = document.createElement('div');
+                        roomElement.className = 'chatroom';
+                        roomElement.innerHTML = `
+                            <h3>${room.roomName}</h3>
+                            <button onclick="enterRoom('${room.roomId}')">입장하기</button>
+                        `;
+                        chatroomsList.appendChild(roomElement);
+                    });
+                }
+            })
+            .catch((error) => {
+                console.error('Error:', error);
+                alert('An error occurred while fetching chat rooms.');
+            });
+        });
+
+        function enterRoom(roomId) {
+            const token = getCookie('token');
+            if (!token) {
+                alert('No token found. Please log in again.');
+                window.location.href = 'index.html';
+                return;
+            }
+
+            sessionStorage.setItem('roomId', roomId);
+            sessionStorage.setItem('token', token);
+            window.location.href = 'chat.html';
+        }
+    </script>
+</body>
+</html>

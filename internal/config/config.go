@@ -15,6 +15,7 @@ type MongoConfig struct {
 
 type JwtConfig struct {
 	SignKey       string `mapstructure:"sign-key"`
+	RefreshKey    string `mapstructure:"refresh-key"`
 	Realm         string `mapstructure:"realm"`
 	ExpireMinutes int    `mapstructure:"expire-minutes"`
 	RefreshDays   int    `mapstructure:"refresh-days"`
@@ -52,6 +53,8 @@ type AppConfig struct {
 	Redis RedisConfig `mapstructure:"redis"`
 }
 
+var appConfig AppConfig
+
 func LoadConfig() (AppConfig, error) {
 	var config AppConfig
 
@@ -73,4 +76,8 @@ func LoadConfig() (AppConfig, error) {
 	}
 
 	return config, nil
+}
+
+func GetAppConfig() AppConfig {
+	return appConfig
 }

@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Chat</title>
+</head>
+<body>
+    <input id="roomId" type="text" placeholder="Enter room ID"/>
+    <button onclick="joinRoom()">Join Room</button>
+    <input id="message" type="text" placeholder="Enter message" style="display: none;"/>
+    <button id="sendButton" onclick="sendMessage()" style="display: none;">Send</button>
+    <ul id="messages"></ul>
+
+    <script>
+        let socket;
+
+        function joinRoom() {
+            const roomId = document.getElementById('roomId').value;
+            socket = new WebSocket(`ws://localhost:8080/ws?roomId=${roomId}`);
+
+            socket.onopen = function(event) {
+                console.log("Connected to WebSocket server");
+                document.getElementById('message').style.display = 'block';
+                document.getElementById('sendButton').style.display = 'block';
+                setInterval(function() {
+                    socket.send(JSON.stringify({ type: 'ping' }));
+                }, 30000); // 30초마다 ping 메시지 전송
+            };
+
+            socket.onmessage = function(event) {
+                const messages = document.getElementById('messages');
+                const message = document.createElement('li');
+                message.textContent = event.data;
+                messages.appendChild(message);
+            };
+
+            socket.onclose = function(event) {
+                console.log("WebSocket connection closed:", event);
+            };
+        }
+
+        function sendMessage() {
+            const input = document.getElementById('message');
+            socket.send(input.value);
+            input.value = '';
+        }
+    </script>
+</body>
+</html>

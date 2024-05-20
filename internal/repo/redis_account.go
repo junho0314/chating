@@ -11,8 +11,6 @@ import (
 
 func InsertRefreshToken(accountId int64, token string, expiration time.Duration, localCtx *model.LocalCtx) error {
 
-	accountIdToString := strconv.FormatInt(accountId, 10)
-
 	refreshToken, _, err := GetRefreshToken(accountId, localCtx)
 	if err == nil && refreshToken != "" {
 		return nil
@@ -20,7 +18,9 @@ func InsertRefreshToken(accountId int64, token string, expiration time.Duration,
 
 	log.Info().Msgf("refresh token: %v", refreshToken)
 
-	err = localCtx.RedisCtx.SetWithExpire(constants.RefreshTokenKey+accountIdToString, token, expiration)
+	accountIdStr := strconv.FormatInt(accountId, 10)
+
+	err = localCtx.RedisCtx.SetWithExpire(constants.RefreshTokenKey+accountIdStr, token, expiration)
 	if err != nil {
 		log.Error().Msgf("Failed to set key: %v", err)
 		return err
@@ -47,4 +47,24 @@ func GetRefreshToken(accountId int64, localCtx *model.LocalCtx) (string, time.Ti
 	}
 	expire := time.Now().Add(exp)
 	return token, expire, nil
+}
+
+func CheckRefreshToken(accountId int64, userToken string, localCtx *model.LocalCtx) (bool, error) {
+
+	accountIdToString := strconv.FormatInt(accountId, 10)
+
+	token, err := localCtx.RedisCtx.Get(constants.RefreshTokenKey + accountIdToString)
+	if err != nil {
+		return false, err
+	}
+
+	if token == "" {
+		return false, nil
+	}
+
+	if token != userToken {
+		return false, nil
+	}
+
+	return true, nil
 }

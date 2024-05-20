@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Login Success</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #f0f0f0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+        }
+        .success-container {
+            background-color: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+            text-align: center;
+        }
+        .success-container h2 {
+            color: #4CAF50;
+        }
+        .success-container p {
+            margin: 20px 0;
+        }
+        .success-container button {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 4px;
+            background-color: #4CAF50;
+            color: white;
+            font-size: 16px;
+            cursor: pointer;
+        }
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/js-cookie@3.0.1/dist/js.cookie.min.js"></script>
+</head>
+<body>
+    <div class="success-container">
+        <h2>로그인을 성공했습니다!</h2>
+        <p>환영합니다. 로그인에 성공하셨습니다.</p>
+        <button onclick="goToChatRooms()">확인</button>
+    </div>
+
+    <script>
+        function getCookie(name) {
+            return Cookies.get(name);
+        }
+
+        document.addEventListener('DOMContentLoaded', function() {
+            const token = getCookie('token');
+            alert('Retrieved token: ' + token); // 쿠키에서 읽어온 토큰 확인
+
+            if (!token) {
+                alert('No token found. Please log in again.');
+                window.location.href = 'index.html'; // 로그인 페이지로 리디렉션
+                return;
+            }
+        });
+
+        function goToChatRooms() {
+            window.location.href = 'chatrooms.html';
+        }
+    </script>
+</body>
+</html>

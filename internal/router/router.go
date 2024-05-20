@@ -8,42 +8,47 @@ import (
 	"chating_service/internal/db"
 	"chating_service/internal/model"
 
-	jwt "github.com/appleboy/gin-jwt/v2"
-	"github.com/rs/zerolog/log"
-
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 )
 
-func InitRoute(router *gin.Engine, autoMiddleware *jwt.GinJWTMiddleware) {
-	router.NoRoute(autoMiddleware.MiddlewareFunc(), func(c *gin.Context) {
-		claims := jwt.ExtractClaims(c)
-		log.Error().Msgf("No route claims: %#v", claims)
+func InitRoute(router *gin.Engine, autoMiddleware gin.HandlerFunc) {
+	router.NoRoute(func(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{})
 	})
 
 	router.Use(cors.New(cors.Config{
-		AllowOrigins: []string{"*"},
-		AllowMethods: []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
-		AllowHeaders: []string{"Origin", "Content-Length", "Content-Type", "Authorization"},
+		AllowOrigins:     []string{"*"},
+		AllowMethods:     []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
+		AllowHeaders:     []string{"Origin", "Content-Length", "Content-Type", "Authorization"},
+		AllowCredentials: true,
 	}))
 
 	hub := controller.NewHub()
 	go hub.Run()
 
 	routerGrout := router.Group("/api")
-	routerGrout.Use(autoMiddleware.MiddlewareFunc(), localCtxMiddleware())
+	routerGrout.Use(autoMiddleware, localCtxMiddleware())
 	{
 		routerGrout.POST("/", controller.RdsTest)
-		routerGrout.GET("/chating/:roomId", func(c *gin.Context) {
-			controller.WebsocketHandler(hub, c)
-		})
+
+		routerGrout.GET("/chating_room", controller.GetChatingRoom)
 
 	}
 
-	router.POST("/login", autoMiddleware.LoginHandler)
-	router.POST("/refresh_token", autoMiddleware.RefreshHandler)
-	router.POST("/logout", autoMiddleware.LogoutHandler)
+	router.GET("/chating/:roomId", func(c *gin.Context) {
+		controller.WebsocketHandler(hub, c)
+	})
+
+	router.POST("/login", func(ctx *gin.Context) {
+		controller.LoginHandler(ctx, autoMiddleware)
+	})
+	router.POST("/refresh_token", func(ctx *gin.Context) {
+		controller.RefreshTokenHandler(ctx, autoMiddleware)
+	})
+	router.POST("/logout", func(ctx *gin.Context) {
+
+	})
 }
 
 func localCtxMiddleware() gin.HandlerFunc {

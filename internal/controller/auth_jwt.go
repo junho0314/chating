@@ -1,15 +1,12 @@
 package controller
 
 import (
-	"database/sql"
 	"errors"
 	"net/http"
-	"strconv"
-	"strings"
 	"time"
 
-	jwt "github.com/appleboy/gin-jwt/v2"
 	"github.com/gin-gonic/gin"
+	"github.com/golang-jwt/jwt/v4"
 	"github.com/rs/zerolog/log"
 
 	"chating_service/internal/config"
@@ -19,146 +16,173 @@ import (
 	"chating_service/internal/utils"
 )
 
-// InitJwt Initialize JWT middleware
-func InitJwt(appConfig *config.AppConfig) (authMiddleware *jwt.GinJWTMiddleware) {
+var AccessSecret []byte
+var RefreshSecret []byte
 
-	authMiddleware, err := jwt.New(&jwt.GinJWTMiddleware{
-		Key:            []byte(appConfig.Jwt.SignKey),
-		Timeout:        time.Duration(appConfig.Jwt.ExpireMinutes) * time.Minute,
-		IdentityKey:    "id",
-		TokenLookup:    "header: Authorization, query: token, cookie: jwt",
-		TokenHeadName:  "Bearer",
-		TimeFunc:       time.Now,
-		CookieSameSite: http.SameSiteDefaultMode,
-		PayloadFunc: func(data interface{}) jwt.MapClaims {
-			if account, ok := data.(*model.Account); ok {
-				encryptedAccountId := utils.EncryptAES(strconv.FormatInt(account.Id, 10))
-				return jwt.MapClaims{
-					"id": encryptedAccountId,
-				}
-			}
-			return jwt.MapClaims{}
-		},
-		IdentityHandler: func(c *gin.Context) interface{} {
-			claims := jwt.ExtractClaims(c)
-			decryptedAccountId := utils.DecryptAES(claims["id"].(string))
-			accountId, _ := strconv.ParseInt(decryptedAccountId, 10, 64)
-			c.Set(constants.AccountIdField, accountId)
-			return &model.Account{
-				Id: accountId,
-			}
-		},
-		Authorizator: func(data interface{}, c *gin.Context) bool {
-			if account, ok := data.(*model.Account); ok {
-				c.Set(constants.AccountIdField, account.Id)
-
-				return true
-			}
-			log.Error().Msg(
-				"authorization error: " + data.(string))
-			return false
-		},
-		LoginResponse: func(c *gin.Context, code int, token string, exp time.Time) {
-			log.Debug().Int("LoginResponse : Status - ", code).Msg(", token:[" + token + "]")
-
-			LoginResponse(c, code, token, exp)
-
-		},
-		LogoutResponse: func(c *gin.Context, code int) {
-			log.Debug().Int("LogoutResponse : ", code)
-		},
-		Authenticator: func(c *gin.Context) (interface{}, error) {
-			var loginForm model.UserLogin
-			err := c.ShouldBindJSON(&loginForm)
-			if err != nil {
-				// missing userId or password
-				setLoginFailureResponseCode(c, constants.InvalidCredentials, constants.Error)
-				return "", jwt.ErrMissingLoginValues
-			}
-			var token string
-			authHeader := c.GetHeader("Authorization") // "Authorization" 헤더에서 값을 가져옵니다.
-			if strings.HasPrefix(authHeader, "Bearer ") {
-				token = strings.TrimPrefix(authHeader, "Bearer ") // "Bearer " 접두어를 제거합니다.
-				// token 변수를 사용하여 로직을 계속 진행합니다.
-			}
-
-			account, err := authenticateAccount(c, appConfig, loginForm.UserId, loginForm.Password, token)
-			if err != nil {
-				log.Error().Msg(
-					"auth error. " + err.Error())
-				return nil, err
-			}
-			c.Set("userAccount", &account)
-
-			return &account, nil
-		},
-		Unauthorized: func(c *gin.Context, code int, message string) {
-			log.Debug().Int("Unauthorized", code).Msg(message)
-
-			// If the login request is invalid
-			if _, exists := c.Keys[constants.ResponseCodeKey]; exists {
-				responseCode := c.Keys[constants.ResponseCodeKey].(int)
-				domainCodeValue := c.Keys[constants.DomainCodeKey].(int)
-
-				LoginFailureResponse(c, responseCode, domainCodeValue)
-				return
-			}
-
-			TokenExpireLoginResponse(c, code, message)
-		},
-	})
-
-	if err != nil {
-		log.Error().Msg(
-			"JWT Error:" + err.Error())
-	}
-
-	return authMiddleware
+type CustomClaims struct {
+	ID       int64  `json:"id"`
+	Username string `json:"username"`
+	jwt.RegisteredClaims
 }
 
-/**
-* @desc Authenticate login account
-*
-* @param
-* @error
-* @return
- */
-func authenticateAccount(ginCtx *gin.Context, appConfig *config.AppConfig, userId string, password string, pushToken string) (model.Account, error) {
-	localCtx := getLocalCtx(ginCtx)
+func InitJwt(appConfig *config.AppConfig) gin.HandlerFunc {
+
+	AccessSecret = []byte(appConfig.Jwt.SignKey)
+	RefreshSecret = []byte(appConfig.Jwt.RefreshKey)
+
+	return func(c *gin.Context) {
+		authHeader := c.GetHeader("Authorization")
+		if authHeader == "" {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "missing authorization header"})
+			c.Abort()
+			return
+		}
+
+		tokenString := authHeader[len("Bearer "):]
+		claims := &CustomClaims{}
+
+		token, err := jwt.ParseWithClaims(tokenString, claims, func(token *jwt.Token) (interface{}, error) {
+			return AccessSecret, nil
+		})
+		if err != nil || !token.Valid {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid token"})
+			c.Abort()
+			return
+		}
+		c.Set(constants.AccountIdField, claims.ID)
+		c.Set("claims", claims)
+		c.Next()
+	}
+}
+
+func authenticateAccount(localCtx *model.LocalCtx, userId, password string) (model.Account, error) {
+
 	account, err := repo.GetUserAccount(localCtx.RdbCtx, userId)
 	if err != nil {
-		if err == sql.ErrNoRows {
-			log.Error().Msgf("user with userId : %s not found", userId)
-			setLoginFailureResponseCode(ginCtx, constants.InvalidUserId, constants.Error)
-			return model.Account{}, errors.New("user not found")
-		}
 		return model.Account{}, err
 	}
 
-	// // check account_status_code
-	// if account.AccountStatus != constants.AccountStatusActive {
-	// 	setLoginFailureResponseCode(ginCtx, constants.InvalidAccountStatus, account.AccountStatus)
-	// 	return account, errors.New("invalid account status")
-	// }
-
-	// if the password is wrong
 	if utils.IsInvalidPassword(password, account.Password) {
-
-		setLoginFailureResponseCode(ginCtx, constants.InvalidPassword, constants.Error)
-
-		return account, errors.New("incorrect password")
+		return model.Account{}, errors.New("incorrect password")
 	}
-
-	// update pushToken
-	repo.InsertRefreshToken(account.Id, pushToken, time.Duration(appConfig.Jwt.RefreshDays*24)*time.Hour, localCtx)
-
-	// push message
-	//utils.SendPushNotification(account.Id, account.UserId)
 
 	return account, nil
 }
 
-func setLoginFailureResponseCode(ginCtx *gin.Context, responseCode int, domainCodeValue int) {
-	ginCtx.Set(constants.ResponseCodeKey, responseCode)
-	ginCtx.Set(constants.DomainCodeKey, domainCodeValue)
+func generateToken(account model.Account, secret []byte, duration time.Duration) (string, time.Time, error) {
+	expire := time.Now().Add(duration)
+	claims := CustomClaims{
+		ID: account.Id,
+		RegisteredClaims: jwt.RegisteredClaims{
+			ExpiresAt: jwt.NewNumericDate(expire),
+		},
+	}
+
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	tokenString, err := token.SignedString(secret)
+	if err != nil {
+		return "", time.Time{}, err
+	}
+
+	return tokenString, expire, nil
+}
+
+func LoginHandler(c *gin.Context, authMiddleware gin.HandlerFunc) {
+	appconfig := config.GetAppConfig()
+
+	localCtx := getLocalCtx(c)
+	log.Info().Msg("LoginHandler")
+
+	var loginForm model.UserLogin
+	if err := c.ShouldBindJSON(&loginForm); err != nil {
+		log.Error().Msgf("Failed to bind login form: %v", err)
+		c.JSON(http.StatusBadRequest, gin.H{"error": "missing login values"})
+		return
+	}
+
+	account, err := authenticateAccount(localCtx, loginForm.UserId, loginForm.Password)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "incorrect username or password"})
+		return
+	}
+
+	accessToken, accessTokenExpire, err := generateToken(account, AccessSecret, time.Minute*time.Duration(appconfig.Jwt.ExpireMinutes))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to generate access token"})
+		return
+	}
+
+	refreshToken, refreshTokenExpire, err := generateToken(account, RefreshSecret, time.Hour*24*time.Duration(appconfig.Jwt.RefreshDays))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to generate refresh token"})
+		return
+	}
+
+	err = repo.InsertRefreshToken(account.Id, refreshToken, time.Hour*24*time.Duration(appconfig.Jwt.RefreshDays), localCtx)
+	if err != nil {
+		log.Error().Msgf("Failed to insert refresh token: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to insert refresh token"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"access_token":   accessToken,
+		"refresh_token":  refreshToken,
+		"access_expire":  accessTokenExpire,
+		"refresh_expire": refreshTokenExpire,
+	})
+}
+
+func RefreshTokenHandler(c *gin.Context, authMiddleware gin.HandlerFunc) {
+	localCtx := getLocalCtx(c)
+
+	var refreshTokenRequest struct {
+		RefreshToken string `json:"refresh_token" binding:"required"`
+	}
+
+	if err := c.ShouldBindJSON(&refreshTokenRequest); err != nil {
+		log.Error().Msgf("Failed to bind refresh token: %v", err)
+		c.JSON(http.StatusBadRequest, gin.H{"error": "missing refresh token"})
+		return
+	}
+
+	token, err := jwt.ParseWithClaims(refreshTokenRequest.RefreshToken, &CustomClaims{}, func(token *jwt.Token) (interface{}, error) {
+		return RefreshSecret, nil
+	})
+	if err != nil || !token.Valid {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid refresh token"})
+		return
+	}
+
+	claims, ok := token.Claims.(*CustomClaims)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid refresh token claims"})
+		return
+	}
+
+	storedRefreshToken, _, err := repo.GetRefreshToken(claims.ID, localCtx)
+	if err != nil || storedRefreshToken != refreshTokenRequest.RefreshToken {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "invalid refresh token"})
+		return
+	}
+
+	account := model.Account{Id: claims.ID}
+	accessToken, accessTokenExpire, err := generateToken(account, AccessSecret, time.Minute*15)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to generate access token"})
+		return
+	}
+
+	newRefreshToken, refreshTokenExpire, err := generateToken(account, RefreshSecret, time.Hour*24*7)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to generate refresh token"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"access_token":   accessToken,
+		"refresh_token":  newRefreshToken,
+		"access_expire":  accessTokenExpire,
+		"refresh_expire": refreshTokenExpire,
+	})
 }
